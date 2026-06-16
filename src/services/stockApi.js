@@ -1,8 +1,15 @@
 import { getMockStock, getAvailableTickers } from '../data/mockStocks'
 import { fetchFinnhubStock, isStockApiConfigured } from './marketDataProvider'
+import { FinnhubRateLimitError } from './finnhubCache'
 import { MESSAGES, logError } from '../constants/messages'
 
 export { getAvailableTickers, isStockApiConfigured }
+
+function devLogSearch(label, payload) {
+  if (import.meta.env.DEV) {
+    console.debug(`[Stock Search] ${label}`, payload)
+  }
+}
 
 const DEFAULT_AI_ANALYSIS =
   'ניתוח לימודי כללי: מומלץ לבחון את יסודות החברה, סביבת השוק והסיכונים לפני קבלת החלטות. מידע זה אינו מהווה ייעוץ השקעות.'
@@ -72,22 +79,31 @@ export async function getStockData(ticker) {
   }
 
   const mock = getMockStock(symbol)
+  devLogSearch('searched ticker', symbol)
 
   if (isStockApiConfigured()) {
     try {
       const live = await fetchFinnhubStock(symbol)
 
       if (!live) {
+        devLogSearch('final stock object', null)
         return { stock: null, notFound: true, error: null }
       }
 
+      const stock = enrichLiveStock(live, mock)
+      devLogSearch('final stock object', stock)
+
       return {
-        stock: enrichLiveStock(live, mock),
+        stock,
         notFound: false,
         error: null,
       }
     } catch (error) {
       logError('stockApi', error)
+
+      if (error instanceof FinnhubRateLimitError) {
+        return { stock: null, notFound: false, error: MESSAGES.rateLimit }
+      }
 
       if (mock) {
         return { stock: enrichMockStock(mock), notFound: false, error: null }

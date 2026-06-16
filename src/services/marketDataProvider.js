@@ -1,10 +1,20 @@
 import { MESSAGES, logError } from '../constants/messages'
 import { mapNewsArticle } from '../utils/news'
+import {
+  buildFinnhubCacheKey,
+  withFinnhubCache,
+  markFinnhubRateLimited,
+  isFinnhubRateLimited,
+  FinnhubRateLimitError,
+} from './finnhubCache'
+
 export {
   fetchHistoricalCandles,
   CHART_RANGES,
   isTwelveDataConfigured,
 } from './twelveDataProvider'
+
+export { FinnhubRateLimitError, isFinnhubRateLimited, markSearchStart, markSearchEnd } from './finnhubCache'
 
 const DEFAULT_BASE_URL = 'https://finnhub.io/api/v1'
 const PLACEHOLDER_PREFIX = 'your_'
@@ -47,43 +57,66 @@ function devLogFinnhub(label, payload) {
   }
 }
 
-/**
- * Fetches a Finnhub endpoint. Returns null on HTTP/API errors.
- * Throws only on network failure when throwOnNetworkError is true.
- */
-async function fetchFinnhubData(path, params, label, { throwOnNetworkError = false } = {}) {
+async function performFinnhubFetch(path, params, label, { priority = 'normal' } = {}) {
+  const cacheKey = buildFinnhubCacheKey(path, params)
   const url = buildUrl(path, params)
 
-  let response
+  return withFinnhubCache(
+    cacheKey,
+    async () => {
+      let response
+      try {
+        response = await fetch(url)
+      } catch (error) {
+        logError('marketDataProvider', error)
+        devLogFinnhub(label, { error: error.message, type: 'network' })
+        return null
+      }
+
+      let data = null
+      try {
+        data = await response.json()
+      } catch {
+        data = null
+      }
+
+      devLogFinnhub(label, { status: response.status, data })
+
+      if (response.status === 429) {
+        markFinnhubRateLimited()
+        if (priority === 'high') {
+          throw new FinnhubRateLimitError()
+        }
+        return null
+      }
+
+      if (!response.ok) {
+        return null
+      }
+
+      if (data && typeof data === 'object' && data.error) {
+        return null
+      }
+
+      return data
+    },
+    { priority },
+  )
+}
+
+/**
+ * Fetches a Finnhub endpoint with per-ticker caching (15 min).
+ */
+async function fetchFinnhubData(path, params, label, { priority = 'normal' } = {}) {
   try {
-    response = await fetch(url)
+    return await performFinnhubFetch(path, params, label, { priority })
   } catch (error) {
-    logError('marketDataProvider', error)
-    devLogFinnhub(label, { error: error.message, type: 'network' })
-    if (throwOnNetworkError) {
-      throw new Error(MESSAGES.networkError)
+    if (error instanceof FinnhubRateLimitError) {
+      throw error
     }
+    logError('marketDataProvider', error)
     return null
   }
-
-  let data = null
-  try {
-    data = await response.json()
-  } catch {
-    data = null
-  }
-
-  devLogFinnhub(label, { status: response.status, data })
-
-  if (!response.ok) {
-    return null
-  }
-
-  if (data && typeof data === 'object' && data.error) {
-    return null
-  }
-
-  return data
 }
 
 function formatMarketCap(valueInMillions) {
@@ -138,7 +171,7 @@ function buildMetrics(profile) {
   }
 }
 
-async function fetchCompanyNewsRaw(symbol, daysBack = 30) {
+async function fetchCompanyNewsRaw(symbol, daysBack = 30, { priority = 'normal' } = {}) {
   const to = new Date()
   const from = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
 
@@ -150,29 +183,34 @@ async function fetchCompanyNewsRaw(symbol, daysBack = 30) {
       to: formatDate(to),
     },
     `company-news:${symbol}`,
+    { priority },
   )
 
   return Array.isArray(data) ? data : []
 }
 
-async function fetchCompanyNewsArticles(symbol, limit = 5) {
+async function fetchCompanyNewsArticles(symbol, limit = 5, { priority = 'high' } = {}) {
   try {
-    const data = await fetchCompanyNewsRaw(symbol, 30)
+    const data = await fetchCompanyNewsRaw(symbol, 30, { priority })
     return data
       .slice(0, limit)
       .map(mapNewsArticle)
       .filter(Boolean)
-  } catch {
+  } catch (error) {
+    if (error instanceof FinnhubRateLimitError) {
+      throw error
+    }
     return []
   }
 }
 
-async function fetchNewsSentiment(symbol) {
+async function fetchNewsSentiment(symbol, { priority = 'normal' } = {}) {
   try {
     const data = await fetchFinnhubData(
       '/news-sentiment',
       { symbol },
       `news-sentiment:${symbol}`,
+      { priority },
     )
 
     if (!data || (!data.buzz && !data.sentiment && data.companyNewsScore == null)) {
@@ -180,16 +218,26 @@ async function fetchNewsSentiment(symbol) {
     }
 
     return data
-  } catch {
+  } catch (error) {
+    if (error instanceof FinnhubRateLimitError) {
+      throw error
+    }
     return null
   }
 }
 
-async function fetchQuoteSummary(symbol) {
+async function fetchQuoteSummary(symbol, { priority = 'low' } = {}) {
   const [quoteResult, profileResult] = await Promise.allSettled([
-    fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`),
-    fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`),
+    fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`, { priority }),
+    fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`, { priority }),
   ])
+
+  if (quoteResult.status === 'rejected' && quoteResult.reason instanceof FinnhubRateLimitError) {
+    throw quoteResult.reason
+  }
+  if (profileResult.status === 'rejected' && profileResult.reason instanceof FinnhubRateLimitError) {
+    throw profileResult.reason
+  }
 
   const quote = quoteResult.status === 'fulfilled' ? quoteResult.value : null
   const profile = profileResult.status === 'fulfilled' ? profileResult.value : null
@@ -212,7 +260,7 @@ async function fetchQuoteSummary(symbol) {
 
 async function fetchMarketNews(limit = 10) {
   try {
-    const data = await fetchFinnhubData('/news', { category: 'general' }, 'market-news')
+    const data = await fetchFinnhubData('/news', { category: 'general' }, 'market-news', { priority: 'low' })
     if (!Array.isArray(data)) return []
     return data
       .slice(0, limit)
@@ -223,44 +271,73 @@ async function fetchMarketNews(limit = 10) {
   }
 }
 
+function devLogSearch(label, payload) {
+  if (import.meta.env.DEV) {
+    console.debug(`[Stock Search] ${label}`, payload)
+  }
+}
+
 /**
  * Fetches complete stock data from Finnhub.
- * Returns null when the ticker is not found.
- * Throws only on network failure while fetching the quote.
+ * Returns null only when the ticker has no valid quote price and no valid profile.
  */
 export async function fetchFinnhubStock(symbol) {
-  const [quoteResult, profileResult] = await Promise.allSettled([
-    fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`, { throwOnNetworkError: true }),
-    fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`),
-  ])
+  let quote = null
+  let profile = null
 
-  if (quoteResult.status === 'rejected') {
-    throw quoteResult.reason
+  try {
+    const [quoteResult, profileResult] = await Promise.allSettled([
+      fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`, { priority: 'high' }),
+      fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`, { priority: 'high' }),
+    ])
+
+    if (quoteResult.status === 'rejected') {
+      throw quoteResult.reason
+    }
+    if (profileResult.status === 'rejected') {
+      throw profileResult.reason
+    }
+
+    quote = quoteResult.value
+    profile = profileResult.value
+  } catch (error) {
+    if (error instanceof FinnhubRateLimitError) {
+      throw error
+    }
+    logError('marketDataProvider', error)
   }
 
-  const quote = quoteResult.value
-  const profile = profileResult.status === 'fulfilled' ? profileResult.value : null
   const price = getQuotePrice(quote)
   const hasProfile = isProfileValid(profile)
 
+  devLogSearch('quote result', { symbol, quote, price })
+  devLogSearch('profile result', { symbol, profile, hasProfile })
+
   if (price == null && !hasProfile) {
+    if (isFinnhubRateLimited()) {
+      throw new FinnhubRateLimitError()
+    }
     return null
   }
 
-  if (price == null) {
-    return null
+  let newsArticles = []
+  try {
+    newsArticles = await fetchCompanyNewsArticles(symbol, 5, { priority: 'high' })
+  } catch (error) {
+    if (error instanceof FinnhubRateLimitError) {
+      // Quote/profile succeeded — show stock without news rather than failing search.
+      newsArticles = []
+    }
   }
-
-  const newsArticles = await fetchCompanyNewsArticles(symbol, 5).catch(() => [])
 
   const { change, changePercent } = extractQuoteChange(quote)
 
   return {
-    symbol,
+    symbol: (profile?.ticker || symbol).toUpperCase(),
     name: profile?.name || symbol,
-    price,
-    change,
-    changePercent,
+    price: price ?? 0,
+    change: price != null ? change : 0,
+    changePercent: price != null ? changePercent : 0,
     metrics: buildMetrics(profile),
     newsArticles: newsArticles ?? [],
     isLive: true,
