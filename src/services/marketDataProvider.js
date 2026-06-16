@@ -1,5 +1,10 @@
 import { MESSAGES, logError } from '../constants/messages'
 import { mapNewsArticle } from '../utils/news'
+export {
+  fetchHistoricalCandles,
+  CHART_RANGES,
+  isTwelveDataConfigured,
+} from './twelveDataProvider'
 
 const DEFAULT_BASE_URL = 'https://finnhub.io/api/v1'
 const PLACEHOLDER_PREFIX = 'your_'
@@ -132,60 +137,6 @@ function buildMetrics(profile) {
     exchange: profile.exchange || 'לא זמין',
   }
 }
-
-const CHART_RANGE_CONFIG = {
-  '10d': { label: '10 ימים', days: 14, resolutions: ['D'] },
-  '1m': { label: 'חודש', days: 45, resolutions: ['D'] },
-  '1y': { label: 'שנה', days: 365, resolutions: ['W', 'D'] },
-  '5y': { label: '5 שנים', days: 365 * 5, resolutions: ['M', 'W'] },
-}
-
-function parseCandleResponse(data) {
-  if (data?.s !== 'ok') return null
-  if (!Array.isArray(data.c) || !Array.isArray(data.t)) return null
-  if (data.c.length <= 1 || data.t.length <= 1) return null
-  if (data.c.length !== data.t.length) return null
-  return { closes: data.c, timestamps: data.t }
-}
-
-/**
- * Fetches historical closing prices for a chart timeframe.
- * Returns null when Finnhub has no valid candle data for the range.
- */
-export async function fetchHistoricalCandles(symbol, rangeKey) {
-  const config = CHART_RANGE_CONFIG[rangeKey]
-  if (!config) return null
-
-  const to = Math.floor(Date.now() / 1000)
-  const from = to - config.days * 24 * 60 * 60
-
-  for (const resolution of config.resolutions) {
-    const data = await fetchFinnhubData(
-      '/stock/candle',
-      { symbol, resolution, from, to },
-      `candle:${symbol}:${rangeKey}:${resolution}`,
-    )
-
-    const parsed = parseCandleResponse(data)
-    if (parsed) {
-      if (rangeKey === '10d' && parsed.closes.length > 10) {
-        const start = parsed.closes.length - 10
-        return {
-          closes: parsed.closes.slice(start),
-          timestamps: parsed.timestamps.slice(start),
-        }
-      }
-      return parsed
-    }
-  }
-
-  return null
-}
-
-export const CHART_RANGES = Object.entries(CHART_RANGE_CONFIG).map(([id, config]) => ({
-  id,
-  label: config.label,
-}))
 
 async function fetchCompanyNewsRaw(symbol, daysBack = 30) {
   const to = new Date()

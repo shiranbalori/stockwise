@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
-import { fetchHistoricalCandles, CHART_RANGES } from '../services/marketDataProvider'
+import {
+  fetchHistoricalCandles,
+  CHART_RANGES,
+  isTwelveDataConfigured,
+} from '../services/twelveDataProvider'
 
 const NO_CHART_MSG = 'אין נתוני גרף זמינים כרגע עבור מניה זו.'
 const LIVE_DATA_NOTE = 'המחיר והנתונים הבסיסיים עדיין מוצגים מנתוני Finnhub חיים.'
-const CHART_SUBTITLE = 'נתוני מחיר היסטוריים מ-Finnhub'
+const CHART_SUBTITLE = 'נתוני מחיר היסטוריים מ-Twelve Data'
 
 export default function PriceChart({ symbol, isPositive, isLive }) {
   const [selectedRange, setSelectedRange] = useState('10d')
@@ -22,7 +26,7 @@ export default function PriceChart({ symbol, isPositive, isLive }) {
     setPoints([])
 
     async function loadChart() {
-      if (!isLive) {
+      if (!isTwelveDataConfigured()) {
         if (!cancelled) {
           setPoints([])
           setUnavailableRanges(new Set(CHART_RANGES.map((r) => r.id)))
@@ -54,7 +58,7 @@ export default function PriceChart({ symbol, isPositive, isLive }) {
     return () => {
       cancelled = true
     }
-  }, [symbol, selectedRange, isLive])
+  }, [symbol, selectedRange])
 
   const handleRangeChange = (rangeKey) => {
     if (unavailableRanges.has(rangeKey)) return
