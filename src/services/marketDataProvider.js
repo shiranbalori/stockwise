@@ -1,4 +1,5 @@
 import { MESSAGES, logError } from '../constants/messages'
+import { mapNewsArticle } from '../utils/news'
 
 const DEFAULT_BASE_URL = 'https://finnhub.io/api/v1'
 const PLACEHOLDER_PREFIX = 'your_'
@@ -35,21 +36,49 @@ function buildUrl(path, params) {
   return url.toString()
 }
 
-async function fetchJson(url) {
+function devLogFinnhub(label, payload) {
+  if (import.meta.env.DEV) {
+    console.debug(`[Finnhub] ${label}`, payload)
+  }
+}
+
+/**
+ * Fetches a Finnhub endpoint. Returns null on HTTP/API errors.
+ * Throws only on network failure when throwOnNetworkError is true.
+ */
+async function fetchFinnhubData(path, params, label, { throwOnNetworkError = false } = {}) {
+  const url = buildUrl(path, params)
+
   let response
   try {
     response = await fetch(url)
   } catch (error) {
     logError('marketDataProvider', error)
-    throw new Error(MESSAGES.networkError)
+    devLogFinnhub(label, { error: error.message, type: 'network' })
+    if (throwOnNetworkError) {
+      throw new Error(MESSAGES.networkError)
+    }
+    return null
   }
+
+  let data = null
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+
+  devLogFinnhub(label, { status: response.status, data })
 
   if (!response.ok) {
-    logError('marketDataProvider', new Error(`HTTP ${response.status}`))
-    throw new Error(MESSAGES.stockLoadFailed)
+    return null
   }
 
-  return response.json()
+  if (data && typeof data === 'object' && data.error) {
+    return null
+  }
+
+  return data
 }
 
 function formatMarketCap(valueInMillions) {
@@ -67,8 +96,19 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10)
 }
 
-function isQuoteValid(quote) {
-  return quote && typeof quote.c === 'number' && quote.c > 0
+function getQuotePrice(quote) {
+  if (!quote) return null
+  if (typeof quote.c === 'number' && quote.c > 0) return quote.c
+  if (typeof quote.pc === 'number' && quote.pc > 0) return quote.pc
+  return null
+}
+
+function extractQuoteChange(quote) {
+  if (!quote) return { change: 0, changePercent: 0 }
+  return {
+    change: typeof quote.d === 'number' ? quote.d : 0,
+    changePercent: typeof quote.dp === 'number' ? quote.dp : 0,
+  }
 }
 
 function isProfileValid(profile) {
@@ -76,94 +116,210 @@ function isProfileValid(profile) {
 }
 
 function buildMetrics(profile) {
+  if (!isProfileValid(profile)) {
+    return {
+      marketCap: 'לא זמין',
+      industry: 'לא זמין',
+      country: 'לא זמין',
+      exchange: 'לא זמין',
+    }
+  }
+
   return {
-    marketCap: formatMarketCap(profile?.marketCapitalization),
-    industry: profile?.finnhubIndustry || 'לא זמין',
-    country: profile?.country || 'לא זמין',
-    exchange: profile?.exchange || 'לא זמין',
+    marketCap: formatMarketCap(profile.marketCapitalization),
+    industry: profile.finnhubIndustry || 'לא זמין',
+    country: profile.country || 'לא זמין',
+    exchange: profile.exchange || 'לא זמין',
   }
 }
 
-async function fetchCandles(symbol) {
+const CHART_RANGE_CONFIG = {
+  '10d': { label: '10 ימים', days: 14, resolutions: ['D'] },
+  '1m': { label: 'חודש', days: 45, resolutions: ['D'] },
+  '1y': { label: 'שנה', days: 365, resolutions: ['W', 'D'] },
+  '5y': { label: '5 שנים', days: 365 * 5, resolutions: ['M', 'W'] },
+}
+
+function parseCandleResponse(data) {
+  if (data?.s !== 'ok') return null
+  if (!Array.isArray(data.c) || !Array.isArray(data.t)) return null
+  if (data.c.length <= 1 || data.t.length <= 1) return null
+  if (data.c.length !== data.t.length) return null
+  return { closes: data.c, timestamps: data.t }
+}
+
+/**
+ * Fetches historical closing prices for a chart timeframe.
+ * Returns null when Finnhub has no valid candle data for the range.
+ */
+export async function fetchHistoricalCandles(symbol, rangeKey) {
+  const config = CHART_RANGE_CONFIG[rangeKey]
+  if (!config) return null
+
   const to = Math.floor(Date.now() / 1000)
-  const from = to - 30 * 24 * 60 * 60
+  const from = to - config.days * 24 * 60 * 60
 
-  const data = await fetchJson(
-    buildUrl('/stock/candle', { symbol, resolution: 'D', from, to }),
-  )
+  for (const resolution of config.resolutions) {
+    const data = await fetchFinnhubData(
+      '/stock/candle',
+      { symbol, resolution, from, to },
+      `candle:${symbol}:${rangeKey}:${resolution}`,
+    )
 
-  if (data?.s !== 'ok' || !Array.isArray(data.c) || data.c.length === 0) {
-    return null
+    const parsed = parseCandleResponse(data)
+    if (parsed) {
+      if (rangeKey === '10d' && parsed.closes.length > 10) {
+        const start = parsed.closes.length - 10
+        return {
+          closes: parsed.closes.slice(start),
+          timestamps: parsed.timestamps.slice(start),
+        }
+      }
+      return parsed
+    }
   }
 
-  return data.c.slice(-10)
+  return null
 }
 
-async function fetchCompanyNews(symbol) {
-  const to = new Date()
-  const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+export const CHART_RANGES = Object.entries(CHART_RANGE_CONFIG).map(([id, config]) => ({
+  id,
+  label: config.label,
+}))
 
-  const data = await fetchJson(
-    buildUrl('/company-news', {
+async function fetchCompanyNewsRaw(symbol, daysBack = 30) {
+  const to = new Date()
+  const from = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
+
+  const data = await fetchFinnhubData(
+    '/company-news',
+    {
       symbol,
       from: formatDate(from),
       to: formatDate(to),
-    }),
+    },
+    `company-news:${symbol}`,
   )
 
-  if (!Array.isArray(data) || data.length === 0) {
+  return Array.isArray(data) ? data : []
+}
+
+async function fetchCompanyNewsArticles(symbol, limit = 5) {
+  try {
+    const data = await fetchCompanyNewsRaw(symbol, 30)
+    return data
+      .slice(0, limit)
+      .map(mapNewsArticle)
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+async function fetchNewsSentiment(symbol) {
+  try {
+    const data = await fetchFinnhubData(
+      '/news-sentiment',
+      { symbol },
+      `news-sentiment:${symbol}`,
+    )
+
+    if (!data || (!data.buzz && !data.sentiment && data.companyNewsScore == null)) {
+      return null
+    }
+
+    return data
+  } catch {
+    return null
+  }
+}
+
+async function fetchQuoteSummary(symbol) {
+  const [quoteResult, profileResult] = await Promise.allSettled([
+    fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`),
+    fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`),
+  ])
+
+  const quote = quoteResult.status === 'fulfilled' ? quoteResult.value : null
+  const profile = profileResult.status === 'fulfilled' ? profileResult.value : null
+  const price = getQuotePrice(quote)
+
+  if (price == null) {
     return null
   }
 
-  return data.slice(0, 3).map((item) => item.headline).filter(Boolean)
+  const { change, changePercent } = extractQuoteChange(quote)
+
+  return {
+    symbol,
+    name: profile?.name || symbol,
+    price,
+    change,
+    changePercent,
+  }
 }
 
-function buildChartFromPrice(price) {
-  const points = []
-  for (let i = 0; i < 9; i++) {
-    points.push(price * (0.97 + i * 0.003))
+async function fetchMarketNews(limit = 10) {
+  try {
+    const data = await fetchFinnhubData('/news', { category: 'general' }, 'market-news')
+    if (!Array.isArray(data)) return []
+    return data
+      .slice(0, limit)
+      .map(mapNewsArticle)
+      .filter(Boolean)
+  } catch {
+    return []
   }
-  points.push(price)
-  return points
 }
 
 /**
  * Fetches complete stock data from Finnhub.
  * Returns null when the ticker is not found.
- * Throws on network/API errors with production-safe messages.
+ * Throws only on network failure while fetching the quote.
  */
 export async function fetchFinnhubStock(symbol) {
-  const [quote, profile] = await Promise.all([
-    fetchJson(buildUrl('/quote', { symbol })),
-    fetchJson(buildUrl('/stock/profile2', { symbol })),
+  const [quoteResult, profileResult] = await Promise.allSettled([
+    fetchFinnhubData('/quote', { symbol }, `quote:${symbol}`, { throwOnNetworkError: true }),
+    fetchFinnhubData('/stock/profile2', { symbol }, `profile:${symbol}`),
   ])
 
-  if (!isQuoteValid(quote) && !isProfileValid(profile)) {
+  if (quoteResult.status === 'rejected') {
+    throw quoteResult.reason
+  }
+
+  const quote = quoteResult.value
+  const profile = profileResult.status === 'fulfilled' ? profileResult.value : null
+  const price = getQuotePrice(quote)
+  const hasProfile = isProfileValid(profile)
+
+  if (price == null && !hasProfile) {
     return null
   }
 
-  if (!isQuoteValid(quote)) {
+  if (price == null) {
     return null
   }
 
-  const [candles, news] = await Promise.all([
-    fetchCandles(symbol).catch(() => null),
-    fetchCompanyNews(symbol).catch(() => null),
-  ])
+  const newsArticles = await fetchCompanyNewsArticles(symbol, 5).catch(() => [])
 
-  const chartPoints = candles?.length ? candles : buildChartFromPrice(quote.c)
+  const { change, changePercent } = extractQuoteChange(quote)
 
   return {
     symbol,
     name: profile?.name || symbol,
-    price: quote.c,
-    change: quote.d ?? 0,
-    changePercent: quote.dp ?? 0,
+    price,
+    change,
+    changePercent,
     metrics: buildMetrics(profile),
-    news: news ?? [],
-    chartPoints,
+    newsArticles: newsArticles ?? [],
     isLive: true,
   }
 }
 
-export { buildChartFromPrice }
+export {
+  fetchCompanyNewsRaw,
+  fetchCompanyNewsArticles,
+  fetchMarketNews,
+  fetchNewsSentiment,
+  fetchQuoteSummary,
+}

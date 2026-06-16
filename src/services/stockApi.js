@@ -1,13 +1,8 @@
 import { getMockStock, getAvailableTickers } from '../data/mockStocks'
-import { fetchFinnhubStock, isStockApiConfigured, buildChartFromPrice } from './marketDataProvider'
+import { fetchFinnhubStock, isStockApiConfigured } from './marketDataProvider'
 import { MESSAGES, logError } from '../constants/messages'
 
 export { getAvailableTickers, isStockApiConfigured }
-
-const DEFAULT_NEWS = [
-  'אין חדשות זמינות כרגע עבור מניה זו.',
-  'ניתן לחפש מקורות מידע נוספים לצורך למידה.',
-]
 
 const DEFAULT_AI_ANALYSIS =
   'ניתוח לימודי כללי: מומלץ לבחון את יסודות החברה, סביבת השוק והסיכונים לפני קבלת החלטות. מידע זה אינו מהווה ייעוץ השקעות.'
@@ -26,14 +21,21 @@ function deriveRating(changePercent) {
   return 'Interesting'
 }
 
-function enrichLiveStock(live, mock) {
-  const chartPoints = live.chartPoints?.length
-    ? live.chartPoints
-    : buildChartFromPrice(live.price)
+function mockNewsToArticles(mock) {
+  if (!mock?.news?.length) return []
+  return mock.news.map((headline, i) => ({
+    id: `mock-${mock.symbol}-${i}`,
+    headline,
+    source: 'נתוני גיבוי',
+    summary: headline,
+    url: null,
+    datetime: null,
+    related: mock.symbol,
+  }))
+}
 
-  const news = live.news?.length
-    ? live.news
-    : mock?.news ?? DEFAULT_NEWS
+function enrichLiveStock(live, mock) {
+  const newsArticles = live.newsArticles?.length ? live.newsArticles : []
 
   const aiAnalysis = mock?.aiAnalysis ?? DEFAULT_AI_ANALYSIS
   const riskLevel = mock?.riskLevel ?? deriveRiskLevel(live.changePercent)
@@ -41,11 +43,10 @@ function enrichLiveStock(live, mock) {
 
   return {
     ...live,
-    news,
+    newsArticles,
     aiAnalysis,
     riskLevel,
     rating,
-    chartPoints,
     isLive: true,
     usedFallback: false,
   }
@@ -54,6 +55,7 @@ function enrichLiveStock(live, mock) {
 function enrichMockStock(mock) {
   return {
     ...mock,
+    newsArticles: mockNewsToArticles(mock),
     isLive: false,
     usedFallback: true,
   }

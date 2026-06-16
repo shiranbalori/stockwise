@@ -1,23 +1,30 @@
-export default function NewsSummary({ items, isLive }) {
+import NewsArticleCard from './NewsArticleCard'
+
+export default function NewsSummary({ articles, isLive }) {
+  const hasArticles = Array.isArray(articles) && articles.length > 0
+
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-200">חדשות אחרונות</h3>
-        <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-500">
-          {isLive ? 'Finnhub' : 'דמו'}
+    <div className="sw-card p-5 sm:p-6 lg:col-span-2">
+      <div className="mb-4 flex items-center justify-between">
+        <h3 className="text-base font-semibold text-[#F8FAFC]">חדשות אחרונות על המניה</h3>
+        <span className="rounded-full bg-[#243447] px-2 py-0.5 text-xs sw-text-muted border border-[rgba(148,163,184,0.12)]">
+          {isLive ? 'Finnhub' : 'גיבוי'}
         </span>
       </div>
-      <ul className="space-y-3">
-        {items.map((item, i) => (
-          <li
-            key={i}
-            className="flex gap-3 rounded-lg border border-slate-800/80 bg-slate-900/40 px-3 py-2.5 text-sm text-slate-300"
-          >
-            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
-            {item}
-          </li>
-        ))}
-      </ul>
+
+      {!hasArticles && (
+        <p className="text-sm sw-text-secondary">אין מספיק נתונים עדכניים</p>
+      )}
+
+      {hasArticles && (
+        <ul className="space-y-3">
+          {articles.map((article) => (
+            <li key={article.id}>
+              <NewsArticleCard article={article} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

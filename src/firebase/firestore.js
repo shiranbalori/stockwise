@@ -40,14 +40,14 @@ export async function removeFavorite(userId, symbol) {
 
 export async function addSearchHistory(userId, symbol) {
   if (!isFirebaseConfigured || !db || !userId) return
-  const id = `${symbol}_${Date.now()}`
-  await setDoc(doc(db, 'users', userId, SEARCH_HISTORY, id), {
-    symbol,
+  const upper = symbol.toUpperCase()
+  await setDoc(doc(db, 'users', userId, SEARCH_HISTORY, upper), {
+    symbol: upper,
     searchedAt: serverTimestamp(),
   })
 }
 
-export async function getSearchHistory(userId, max = 10) {
+export async function getSearchHistory(userId, max = 5) {
   if (!isFirebaseConfigured || !db || !userId) return []
   const q = query(
     userCollection(userId, SEARCH_HISTORY),

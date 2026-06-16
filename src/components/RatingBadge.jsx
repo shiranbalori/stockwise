@@ -1,7 +1,7 @@
 const RATING_STYLES = {
-  Interesting: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
-  Neutral: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
-  Risky: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  Interesting: 'bg-[rgba(96,165,250,0.12)] text-[#60A5FA] border-[rgba(96,165,250,0.25)]',
+  Neutral: 'bg-[rgba(148,163,184,0.1)] text-[#CBD5E1] border-[rgba(148,163,184,0.2)]',
+  Risky: 'bg-[rgba(245,158,11,0.12)] text-[#F59E0B] border-[rgba(245,158,11,0.25)]',
 }
 
 const RATING_LABELS = {

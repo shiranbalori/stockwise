@@ -1,10 +1,10 @@
 export default function AIAnalysis({ text }) {
   return (
-    <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600/30">
+    <div className="sw-card p-5 sm:p-6">
+      <div className="mb-4 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#243447] border border-[rgba(148,163,184,0.12)]">
           <svg
-            className="h-4 w-4 text-indigo-400"
+            className="h-4 w-4 text-[#60A5FA]"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -17,12 +17,12 @@ export default function AIAnalysis({ text }) {
             />
           </svg>
         </div>
-        <h3 className="text-sm font-semibold text-indigo-200">ניתוח AI</h3>
-        <span className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-300">
+        <h3 className="text-base font-semibold text-[#F8FAFC]">ניתוח AI</h3>
+        <span className="rounded-full bg-[#243447] px-2 py-0.5 text-xs sw-text-secondary border border-[rgba(148,163,184,0.12)]">
           לימודי
         </span>
       </div>
-      <p className="text-sm leading-relaxed text-slate-300">{text}</p>
+      <p className="text-sm leading-relaxed sw-text-secondary">{text}</p>
     </div>
   )
 }

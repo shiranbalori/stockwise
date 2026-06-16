@@ -14,7 +14,25 @@ function loadLocalHistory() {
 }
 
 function saveLocalHistory(history) {
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(history.slice(0, 10)))
+  localStorage.setItem(LOCAL_KEY, JSON.stringify(history.slice(0, 5)))
+}
+
+function normalizeHistory(symbols) {
+  const seen = new Set()
+  const unique = []
+  for (const symbol of symbols) {
+    const upper = symbol.toUpperCase()
+    if (!seen.has(upper)) {
+      seen.add(upper)
+      unique.push(upper)
+    }
+  }
+  return unique.slice(0, 5)
+}
+
+function moveToTop(symbols, symbol) {
+  const upper = symbol.toUpperCase()
+  return normalizeHistory([upper, ...symbols.filter((s) => s.toUpperCase() !== upper)])
 }
 
 function canUseFirestore(userId) {
@@ -29,7 +47,7 @@ export function useSearchHistory(userId) {
     if (canUseFirestore(userId)) {
       try {
         const data = await getSearchHistory(userId)
-        setHistory(data.map((h) => h.symbol))
+        setHistory(normalizeHistory(data.map((h) => h.symbol)))
         setLoading(false)
         return
       } catch (error) {
@@ -37,7 +55,7 @@ export function useSearchHistory(userId) {
       }
     }
 
-    setHistory(loadLocalHistory())
+    setHistory(normalizeHistory(loadLocalHistory()))
     setLoading(false)
   }, [userId])
 
@@ -58,8 +76,7 @@ export function useSearchHistory(userId) {
       }
     }
 
-    const current = loadLocalHistory().filter((s) => s !== upper)
-    const updated = [upper, ...current].slice(0, 10)
+    const updated = moveToTop(loadLocalHistory(), upper)
     saveLocalHistory(updated)
     setHistory(updated)
   }

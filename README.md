@@ -1,8 +1,8 @@
-# Stock Insight AI
+# StockWise
 
 אפליקציית ניתוח מניות **לימודית** בעברית (RTL). נבנתה עם React, Vite, Tailwind CSS, Firebase ו-Finnhub.
 
-> **הצהרה:** אפליקציה זו מיועדת למטרות לימוד ומידע בלבד ואינה מהווה ייעוץ השקעות.
+> **הצהרה:** המידע באתר מיועד למחקר ולימוד בלבד ואינו מהווה ייעוץ השקעות.
 
 ## Features
 
@@ -19,7 +19,7 @@ cp .env.example .env   # fill in your credentials
 npm run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001)
+Open [http://localhost:3003](http://localhost:3003)
 
 ## Environment Variables
 
@@ -88,7 +88,7 @@ service cloud.firestore {
 
 | Command | Description |
 | ------- | ----------- |
-| `npm run dev` | Dev server (port 3001) |
+| `npm run dev` | Dev server (port 3003) |
 | `npm run build` | Production build → `dist/` |
 | `npm run preview` | Preview production build |
 | `npm run deploy:firebase` | Build + deploy to Firebase Hosting |

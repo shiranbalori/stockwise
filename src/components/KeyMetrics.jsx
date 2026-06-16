@@ -19,19 +19,19 @@ export default function KeyMetrics({ metrics, isLive }) {
     .map((key) => [key, metrics[key]])
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-      <h3 className="text-sm font-semibold text-slate-200">נתוני מפתח</h3>
-      <p className="mt-1 text-xs text-slate-500">
+    <div className="sw-card p-5 sm:p-6">
+      <h3 className="text-base font-semibold text-[#F8FAFC]">נתוני מפתח</h3>
+      <p className="mt-1 text-xs sw-text-muted">
         {isLive ? 'נתונים חיים מ-Finnhub' : 'נתוני גיבוי למטרות לימוד'}
       </p>
-      <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+      <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {entries.map(([key, value]) => (
           <div
             key={key}
-            className="rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2.5"
+            className="sw-card-inner px-3 py-3"
           >
-            <dt className="text-xs text-slate-500">{METRIC_LABELS[key] ?? key}</dt>
-            <dd className="mt-0.5 text-sm font-semibold text-white" dir="ltr">{value}</dd>
+            <dt className="text-xs sw-text-muted">{METRIC_LABELS[key] ?? key}</dt>
+            <dd className="mt-1 text-sm font-semibold text-[#F8FAFC]" dir="ltr">{value}</dd>
           </div>
         ))}
       </dl>
