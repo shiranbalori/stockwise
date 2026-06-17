@@ -10,6 +10,8 @@ const CHART_RANGE_CONFIG = {
   '5y': { label: '5 שנים', interval: '1month', outputsize: 60 },
 }
 
+const WEEKLY_GAIN_OUTPUT_SIZE = 8
+
 export const CHART_RANGES = Object.entries(CHART_RANGE_CONFIG).map(([id, config]) => ({
   id,
   label: config.label,
@@ -109,4 +111,50 @@ async function fetchTimeSeries(symbol, rangeKey) {
  */
 export async function fetchHistoricalCandles(symbol, rangeKey) {
   return fetchTimeSeries(symbol, rangeKey)
+}
+
+/**
+ * Calculates 7-day percentage gain from daily closes (Twelve Data).
+ * Returns null when historical data is unavailable.
+ */
+export async function fetchWeeklyPriceChange(symbol) {
+  if (!isTwelveDataConfigured()) return null
+
+  const url = new URL(`${getBaseUrl()}/time_series`)
+  url.searchParams.set('symbol', symbol)
+  url.searchParams.set('interval', '1day')
+  url.searchParams.set('outputsize', String(WEEKLY_GAIN_OUTPUT_SIZE))
+  url.searchParams.set('apikey', getApiKey())
+
+  let response
+  try {
+    response = await fetch(url.toString())
+  } catch (error) {
+    logError('twelveDataProvider', error)
+    devLogTwelveData(`weekly_gain:${symbol}`, { error: error.message, type: 'network' })
+    return null
+  }
+
+  let data = null
+  try {
+    data = await response.json()
+  } catch {
+    data = null
+  }
+
+  devLogTwelveData(`weekly_gain:${symbol}`, { status: response.status, data })
+
+  if (!response.ok) return null
+
+  const parsed = parseTimeSeriesResponse(data)
+  if (!parsed) return null
+
+  const baseline = parsed.closes[0]
+  const latestClose = parsed.closes[parsed.closes.length - 1]
+  if (baseline <= 0 || latestClose <= 0) return null
+
+  return {
+    weeklyGainPercent: ((latestClose - baseline) / baseline) * 100,
+    latestClose,
+  }
 }

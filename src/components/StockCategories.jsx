@@ -1,6 +1,8 @@
 import { STOCK_CATEGORIES, CATEGORIES_DISCLAIMER, getCategoryById } from '../data/stockCategories'
 import { useCategoryTrending } from '../hooks/useCategoryTrending'
+import { useCategoryWeeklyLeaders } from '../hooks/useCategoryWeeklyLeaders'
 import CategoryTrending from './CategoryTrending'
+import CategoryWeeklyLeaders from './CategoryWeeklyLeaders'
 
 export default function StockCategories({
   selectedCategoryId,
@@ -15,6 +17,12 @@ export default function StockCategories({
     loading: trendingLoading,
     hasInsufficientData,
   } = useCategoryTrending(selectedCategoryId)
+
+  const {
+    stocks: weeklyLeaderStocks,
+    loading: weeklyLeadersLoading,
+    hasInsufficientData: weeklyLeadersInsufficient,
+  } = useCategoryWeeklyLeaders(selectedCategoryId)
 
   const displayTickers = selectedCategory
     ? sortedTickers.length > 0
@@ -93,6 +101,14 @@ export default function StockCategories({
               </button>
             ))}
           </div>
+
+          <CategoryWeeklyLeaders
+            stocks={weeklyLeaderStocks}
+            loading={weeklyLeadersLoading}
+            hasInsufficientData={weeklyLeadersInsufficient}
+            onAnalyze={onAnalyze}
+            analyzeLoading={loading}
+          />
         </div>
       )}
     </section>

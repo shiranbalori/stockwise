@@ -4,6 +4,9 @@ export const CATEGORIES_DISCLAIMER =
 export const TRENDING_DISCLAIMER =
   'הדירוג מבוסס על כמות אזכורים ועניין תקשורתי בלבד, ואינו מהווה המלצת השקעה.'
 
+export const WEEKLY_LEADERS_DISCLAIMER =
+  'הדירוג מבוסס על שינוי מחיר היסטורי בלבד, ואינו מהווה המלצת השקעה.'
+
 export const STOCK_CATEGORIES = [
   {
     id: 'ai-chips',
