@@ -6,6 +6,7 @@ const TABS = [
   { id: 'categories', label: 'קטגוריות', to: '/categories' },
   { id: 'news', label: 'חדשות', to: '/news' },
   { id: 'favorites', label: 'מועדפים', to: '/favorites' },
+  { id: 'quiz', label: 'חידון יומי', to: '/quiz' },
 ]
 
 function resolveActiveTab(pathname, locationState) {

@@ -14,5 +14,6 @@ export function pathToTabId(pathname) {
   if (pathname.startsWith('/categories')) return 'categories'
   if (pathname.startsWith('/news')) return 'news'
   if (pathname.startsWith('/favorites')) return 'favorites'
+  if (pathname.startsWith('/quiz')) return 'quiz'
   return 'search'
 }
