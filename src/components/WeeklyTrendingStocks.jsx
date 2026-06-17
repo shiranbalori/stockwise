@@ -20,6 +20,7 @@ function applyResolvedResult(resolved) {
   return {
     stocks: resolved.stocks,
     hasInsufficientData: resolved.stocks.length === 0 && resolved.hasInsufficientData,
+    newsDataUnavailable: Boolean(resolved.newsDataUnavailable),
   }
 }
 
@@ -29,6 +30,7 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
   const [loading, setLoading] = useState(initialState.loading)
   const [fetchComplete, setFetchComplete] = useState(false)
   const [hasInsufficientData, setHasInsufficientData] = useState(false)
+  const [newsDataUnavailable, setNewsDataUnavailable] = useState(false)
   const stocksRef = useRef(stocks)
   const sectionRef = useRef(null)
   const expandedRef = useRef(false)
@@ -59,6 +61,7 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
         const next = applyResolvedResult(resolved)
         setStocks(next.stocks)
         setHasInsufficientData(next.hasInsufficientData)
+        setNewsDataUnavailable(next.newsDataUnavailable)
       } catch {
         // keep current list on expanded failure
       }
@@ -74,14 +77,17 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
         const next = applyResolvedResult(resolved)
         setStocks(next.stocks)
         setHasInsufficientData(next.hasInsufficientData)
+        setNewsDataUnavailable(next.newsDataUnavailable)
       } catch {
         if (cancelled) return
         const cached = readCachedForMerge()
         if (cached?.stocks?.length > 0) {
           setStocks(cached.stocks)
           setHasInsufficientData(false)
+          setNewsDataUnavailable(false)
         } else if (stocksRef.current.length === 0) {
           setHasInsufficientData(true)
+          setNewsDataUnavailable(false)
         }
       } finally {
         if (!cancelled) {
@@ -119,7 +125,10 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
   }, [])
 
   const showEmptyMessage =
-    fetchComplete && stocks.length === 0 && hasInsufficientData
+    fetchComplete && stocks.length === 0 && hasInsufficientData && !newsDataUnavailable
+
+  const showNewsUnavailableMessage =
+    fetchComplete && newsDataUnavailable
 
   return (
     <section ref={sectionRef} className="sw-card p-6 sm:p-8">
@@ -131,6 +140,12 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
           <div className="sw-spinner h-5 w-5" />
           טוען מניות מדוברות...
         </div>
+      )}
+
+      {showNewsUnavailableMessage && (
+        <p className="mt-6 text-sm sw-text-secondary">
+          לא ניתן לטעון כרגע נתוני אזכורים. נסו שוב מאוחר יותר.
+        </p>
       )}
 
       {showEmptyMessage && (
@@ -173,7 +188,7 @@ export default function WeeklyTrendingStocks({ onAnalyze, analyzeLoading = false
                       <div className="rounded-lg bg-[#243447] px-2.5 py-1 border border-[rgba(148,163,184,0.12)]">
                         <span className="text-lg font-semibold text-[#60A5FA]">{stock.interestScore}</span>
                       </div>
-                      <p className="mt-0.5 text-[10px] sw-text-muted">ציון עניין</p>
+                      <p className="mt-0.5 text-[10px] sw-text-muted">ציון אזכורים</p>
                     </div>
                   </div>
                 </button>

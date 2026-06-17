@@ -16,6 +16,7 @@ export default function StockCategories({
     sortedTickers,
     loading: trendingLoading,
     hasInsufficientData,
+    newsDataUnavailable,
   } = useCategoryTrending(selectedCategoryId)
 
   const {
@@ -80,6 +81,7 @@ export default function StockCategories({
             stocks={trendingStocks}
             loading={trendingLoading}
             hasInsufficientData={hasInsufficientData}
+            newsDataUnavailable={newsDataUnavailable}
             onAnalyze={onAnalyze}
             analyzeLoading={loading}
           />

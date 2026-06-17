@@ -7,6 +7,7 @@ export function useCategoryTrending(categoryId) {
   const [sortedTickers, setSortedTickers] = useState([])
   const [loading, setLoading] = useState(false)
   const [hasInsufficientData, setHasInsufficientData] = useState(false)
+  const [newsDataUnavailable, setNewsDataUnavailable] = useState(false)
 
   useEffect(() => {
     const category = categoryId ? getCategoryById(categoryId) : null
@@ -14,6 +15,7 @@ export function useCategoryTrending(categoryId) {
       setTrendingStocks([])
       setSortedTickers([])
       setHasInsufficientData(false)
+      setNewsDataUnavailable(false)
       return undefined
     }
 
@@ -25,6 +27,7 @@ export function useCategoryTrending(categoryId) {
       setTrendingStocks(result.stocks)
       setSortedTickers(result.sortedTickers)
       setHasInsufficientData(result.hasInsufficientData)
+      setNewsDataUnavailable(Boolean(result.newsDataUnavailable))
       setLoading(false)
     })
 
@@ -33,5 +36,5 @@ export function useCategoryTrending(categoryId) {
     }
   }, [categoryId])
 
-  return { trendingStocks, sortedTickers, loading, hasInsufficientData }
+  return { trendingStocks, sortedTickers, loading, hasInsufficientData, newsDataUnavailable }
 }

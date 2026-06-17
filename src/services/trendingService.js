@@ -1,4 +1,4 @@
-import { isStockApiConfigured } from './marketDataProvider'
+import { isStockApiConfigured, isFinnhubRateLimited } from './marketDataProvider'
 import {
   fetchQuoteSummary,
   fetchCompanyNewsRaw,
@@ -12,7 +12,7 @@ const VERY_RECENT_DAYS = 3
 const TOP_COUNT = 5
 const WEEKLY_MIN_DISPLAY = 5
 const INITIAL_TRENDING_COUNT = 5
-const WEEKLY_CACHE_KEY = 'stockwise_weekly_trending_v1'
+const WEEKLY_CACHE_KEY = 'stockwise_weekly_trending_v2'
 const CACHE_TTL_MS = 30 * 60 * 1000
 const INITIAL_LOAD_DELAY_MS = 3000
 const EXPANDED_LOAD_DELAY_MS = 12000
@@ -78,35 +78,29 @@ function buildSentimentLabel(sentiment) {
   return { label: 'מעורב', detail: `${bullishPct}% חיובי / ${bearishPct}% שלילי`, hasSentiment: true }
 }
 
-function computeRawScore({ newsCount, veryRecentCount, sentiment }) {
-  let score = newsCount * 10 + veryRecentCount * 15
-
-  if (sentiment?.buzz?.articlesInLastWeek) {
-    score += sentiment.buzz.articlesInLastWeek * 2
-  }
-  if (sentiment?.buzz?.buzz) {
-    score += sentiment.buzz.buzz * 20
-  }
-  if (typeof sentiment?.companyNewsScore === 'number') {
-    score += sentiment.companyNewsScore * 25
-  }
-
-  return score
+function computeMentionScore({ newsCount, veryRecentCount }) {
+  return newsCount * 10 + veryRecentCount * 15
 }
 
-function computeQuoteFallbackScore(quoteData) {
-  if (quoteData?.price == null) return 0
-  return 5 + Math.abs(quoteData.changePercent ?? 0)
-}
-
-function sortByInterest(a, b) {
+function sortByMentions(a, b) {
   if (a.hasInsufficientData !== b.hasInsufficientData) {
     return a.hasInsufficientData ? 1 : -1
+  }
+  if (b.newsCount !== a.newsCount) {
+    return b.newsCount - a.newsCount
   }
   if (b.interestScore !== a.interestScore) {
     return b.interestScore - a.interestScore
   }
   return b.rawScore - a.rawScore
+}
+
+function hasRealNewsMentions(stock) {
+  return !stock.hasInsufficientData && stock.newsCount >= 1
+}
+
+function filterMentionRankedStocks(stocks) {
+  return stocks.filter(hasRealNewsMentions)
 }
 
 function normalizeInterestScores(stocks) {
@@ -177,24 +171,33 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function fetchTickerTrendingLite(symbol) {
+async function fetchTickerMentionTrending(symbol, { priority = 'low' } = {}) {
   try {
-    const quote = await fetchQuoteSummary(symbol, { priority: 'low' })
-    if (!quote?.price) {
-      return failedTickerResult(symbol)
-    }
+    const [quoteData, newsItems] = await Promise.allSettled([
+      fetchQuoteSummary(symbol, { priority }),
+      fetchCompanyNewsRaw(symbol, RECENT_DAYS, { priority }),
+    ])
 
-    const rawScore = computeQuoteFallbackScore(quote)
+    const quote = quoteData.status === 'fulfilled' ? quoteData.value : null
+    const news = newsItems.status === 'fulfilled' && Array.isArray(newsItems.value)
+      ? newsItems.value
+      : []
+    const { recent, veryRecent } = countRecentNews(news)
+    const hasInsufficientData = recent === 0
+    const rawScore = hasInsufficientData
+      ? 0
+      : computeMentionScore({ newsCount: recent, veryRecentCount: veryRecent })
+
     return {
       symbol,
-      name: quote.name ?? symbol,
-      price: quote.price,
-      changePercent: quote.changePercent ?? null,
-      newsCount: 0,
+      name: quote?.name ?? symbol,
+      price: quote?.price ?? null,
+      changePercent: quote?.changePercent ?? null,
+      newsCount: recent,
       sentimentLabel: 'לא זמין',
       sentimentDetail: null,
       hasSentiment: false,
-      hasInsufficientData: false,
+      hasInsufficientData,
       rawScore,
       interestScore: 0,
     }
@@ -204,13 +207,13 @@ async function fetchTickerTrendingLite(symbol) {
   }
 }
 
-async function fetchLiteTickersSequential(tickers) {
+async function fetchMentionTickersSequential(tickers, { priority = 'low' } = {}) {
   const results = []
 
-  devLogWeekly('quote-only tickers', tickers)
+  devLogWeekly('mention tickers', tickers)
 
   for (const symbol of tickers) {
-    const outcome = await Promise.allSettled([fetchTickerTrendingLite(symbol)])
+    const outcome = await Promise.allSettled([fetchTickerMentionTrending(symbol, { priority })])
     const result = outcome[0]
     if (result.status === 'fulfilled') {
       results.push(result.value)
@@ -221,12 +224,17 @@ async function fetchLiteTickersSequential(tickers) {
     await sleep(LITE_TICKER_GAP_MS)
   }
 
-  devLogWeekly('quote-only responses', {
+  devLogWeekly('mention responses', {
     requested: tickers.length,
-    successful: results.filter((item) => !item.hasInsufficientData).length,
+    withMentions: results.filter((item) => item.newsCount >= 1).length,
   })
 
   return results
+}
+
+function isNewsDataUnavailable(results) {
+  if (!isFinnhubRateLimited()) return false
+  return !results.some((item) => item.newsCount >= 1)
 }
 
 async function fetchTickerTrending(symbol) {
@@ -245,21 +253,12 @@ async function fetchTickerTrending(symbol) {
   const { recent, veryRecent } = countRecentNews(news)
   const { label, detail, hasSentiment } = buildSentimentLabel(sentimentValue)
 
-  const buzzArticles = sentimentValue?.buzz?.articlesInLastWeek ?? 0
-  const hasQuote = quote?.price != null
-  const hasNewsData = recent > 0 || buzzArticles > 0
   const hasSentimentSignal = hasSentiment || hasSentimentData(sentimentValue)
-  const hasInsufficientData = !hasQuote && !hasNewsData && !hasSentimentSignal
+  const hasInsufficientData = recent === 0
 
-  let rawScore = computeRawScore({
-    newsCount: recent,
-    veryRecentCount: veryRecent,
-    sentiment: sentimentValue,
-  })
-
-  if (rawScore === 0 && hasQuote) {
-    rawScore = computeQuoteFallbackScore(quote)
-  }
+  const rawScore = hasInsufficientData
+    ? 0
+    : computeMentionScore({ newsCount: recent, veryRecentCount: veryRecent })
 
   return {
     symbol,
@@ -278,10 +277,11 @@ async function fetchTickerTrending(symbol) {
 
 function rankWeeklyStocks(results, limit) {
   const scored = normalizeInterestScores(results)
-  const usable = scored.filter((s) => !s.hasInsufficientData)
-  const sorted = [...usable].sort(sortByInterest)
+  const usable = filterMentionRankedStocks(scored)
+  const sorted = [...usable].sort(sortByMentions)
+  const newsDataUnavailable = isNewsDataUnavailable(results)
 
-  devLogWeekly('successful tickers', usable.length)
+  devLogWeekly('tickers with mentions', usable.length)
   devLogWeekly(
     'final ranked list',
     sorted.slice(0, limit).map((s) => ({
@@ -300,7 +300,8 @@ function rankWeeklyStocks(results, limit) {
 
   return {
     stocks: sorted.slice(0, targetCount),
-    hasInsufficientData: usable.length === 0,
+    hasInsufficientData: usable.length === 0 && !newsDataUnavailable,
+    newsDataUnavailable,
   }
 }
 
@@ -311,12 +312,20 @@ export function readWeeklyTrendingCache() {
       return null
     }
 
-    return {
-      stocks: Array.isArray(parsed.stocks) ? parsed.stocks : [],
-      hasInsufficientData: Boolean(parsed.hasInsufficientData),
-    }
+    return normalizeWeeklyCacheEntry(parsed)
   } catch {
     return null
+  }
+}
+
+function normalizeWeeklyCacheEntry(parsed) {
+  const stocks = filterMentionRankedStocks(
+    Array.isArray(parsed?.stocks) ? parsed.stocks : [],
+  )
+  return {
+    stocks,
+    hasInsufficientData: stocks.length === 0 && Boolean(parsed?.hasInsufficientData),
+    newsDataUnavailable: Boolean(parsed?.newsDataUnavailable),
   }
 }
 
@@ -330,10 +339,7 @@ function readWeeklyTrendingCacheStale() {
   try {
     const parsed = readWeeklyTrendingCacheRaw()
     if (!parsed) return null
-    return {
-      stocks: Array.isArray(parsed.stocks) ? parsed.stocks : [],
-      hasInsufficientData: Boolean(parsed.hasInsufficientData),
-    }
+    return normalizeWeeklyCacheEntry(parsed)
   } catch {
     return null
   }
@@ -341,12 +347,22 @@ function readWeeklyTrendingCacheStale() {
 
 export function getInitialWeeklyTrendingState() {
   const cached = readWeeklyTrendingCache() ?? readWeeklyTrendingCacheStale()
+  if (cached?.newsDataUnavailable) {
+    return {
+      stocks: [],
+      loading: true,
+      fetchComplete: false,
+      hasInsufficientData: false,
+      newsDataUnavailable: false,
+    }
+  }
   if (cached?.stocks?.length > 0) {
     return {
       stocks: cached.stocks,
       loading: false,
       fetchComplete: false,
       hasInsufficientData: false,
+      newsDataUnavailable: false,
     }
   }
   return {
@@ -354,14 +370,25 @@ export function getInitialWeeklyTrendingState() {
     loading: true,
     fetchComplete: false,
     hasInsufficientData: false,
+    newsDataUnavailable: false,
   }
 }
 
 export function resolveWeeklyTrendingUpdate(currentStocks, fresh, cached) {
-  const previous =
+  const previous = filterMentionRankedStocks(
     currentStocks.length > 0
       ? currentStocks
-      : (cached?.stocks?.length > 0 ? cached.stocks : [])
+      : (cached?.stocks?.length > 0 ? cached.stocks : []),
+  )
+
+  if (fresh.newsDataUnavailable) {
+    return {
+      stocks: [],
+      hasInsufficientData: false,
+      newsDataUnavailable: true,
+      shouldWriteCache: true,
+    }
+  }
 
   if (fresh.stocks.length >= WEEKLY_MIN_DISPLAY) {
     if (import.meta.env.DEV && previous.length > 0) {
@@ -373,6 +400,16 @@ export function resolveWeeklyTrendingUpdate(currentStocks, fresh, cached) {
     return {
       stocks: fresh.stocks,
       hasInsufficientData: false,
+      newsDataUnavailable: false,
+      shouldWriteCache: true,
+    }
+  }
+
+  if (fresh.stocks.length > 0) {
+    return {
+      stocks: fresh.stocks,
+      hasInsufficientData: false,
+      newsDataUnavailable: false,
       shouldWriteCache: true,
     }
   }
@@ -387,19 +424,21 @@ export function resolveWeeklyTrendingUpdate(currentStocks, fresh, cached) {
     return {
       stocks: previous,
       hasInsufficientData: false,
+      newsDataUnavailable: false,
       shouldWriteCache: false,
     }
   }
 
   return {
-    stocks: fresh.stocks,
+    stocks: [],
     hasInsufficientData: fresh.hasInsufficientData,
-    shouldWriteCache: fresh.stocks.length > 0,
+    newsDataUnavailable: false,
+    shouldWriteCache: false,
   }
 }
 
 function writeWeeklyTrendingCache(result) {
-  if (result.stocks.length === 0) {
+  if (result.stocks.length === 0 && !result.newsDataUnavailable) {
     devLogWeekly('cache write skipped — empty result', null)
     return
   }
@@ -411,6 +450,7 @@ function writeWeeklyTrendingCache(result) {
         timestamp: Date.now(),
         stocks: result.stocks,
         hasInsufficientData: result.hasInsufficientData,
+        newsDataUnavailable: Boolean(result.newsDataUnavailable),
       }),
     )
   } catch {
@@ -418,12 +458,12 @@ function writeWeeklyTrendingCache(result) {
   }
 }
 
-async function fetchWeeklyTrendingLite(tickers, limit) {
+async function fetchWeeklyTrendingMentions(tickers, limit) {
   if (!isStockApiConfigured()) {
-    return { stocks: [], hasInsufficientData: true }
+    return { stocks: [], hasInsufficientData: true, newsDataUnavailable: false }
   }
 
-  const results = await fetchLiteTickersSequential(tickers)
+  const results = await fetchMentionTickersSequential(tickers, { priority: 'low' })
   return rankWeeklyStocks(results, limit)
 }
 
@@ -449,6 +489,7 @@ export async function getCategoryTrending(tickers) {
       stocks: [],
       sortedTickers: tickers,
       hasInsufficientData: true,
+      newsDataUnavailable: false,
       apiFailed: true,
     }
   }
@@ -462,17 +503,19 @@ export async function getCategoryTrending(tickers) {
     })
 
     const scored = normalizeInterestScores(results)
-    const sorted = [...scored].sort(sortByInterest)
+    const sorted = [...scored].sort(sortByMentions)
 
-    const usable = sorted.filter((s) => !s.hasInsufficientData)
+    const usable = filterMentionRankedStocks(sorted)
     const topStocks = usable.slice(0, TOP_COUNT)
-    const hasInsufficientData = usable.length === 0
+    const newsDataUnavailable = isNewsDataUnavailable(results)
+    const hasInsufficientData = usable.length === 0 && !newsDataUnavailable
     const sortedTickers = sorted.map((s) => s.symbol)
 
     return {
       stocks: topStocks,
       sortedTickers,
       hasInsufficientData,
+      newsDataUnavailable,
       apiFailed: false,
     }
   } catch (error) {
@@ -481,13 +524,14 @@ export async function getCategoryTrending(tickers) {
       stocks: [],
       sortedTickers: tickers,
       hasInsufficientData: true,
+      newsDataUnavailable: false,
       apiFailed: true,
     }
   }
 }
 
 /**
- * Initial homepage load: max 5 tickers, quote only, low priority.
+ * Initial homepage load: max 5 tickers, news mentions only, low priority.
  */
 let inFlightInitialFetch = null
 
@@ -502,26 +546,29 @@ export async function getWeeklyTrendingInitial(limit = INITIAL_TRENDING_COUNT) {
     const tickers = getInitialWeeklyTickers(limit)
 
     try {
-      const fresh = await fetchWeeklyTrendingLite(tickers, limit)
+      const fresh = await fetchWeeklyTrendingMentions(tickers, limit)
       const resolved = resolveWeeklyTrendingUpdate([], fresh, cached)
 
       if (resolved.shouldWriteCache) {
         writeWeeklyTrendingCache({
           stocks: resolved.stocks,
           hasInsufficientData: resolved.hasInsufficientData,
+          newsDataUnavailable: resolved.newsDataUnavailable,
         })
       }
 
       return {
         stocks: resolved.stocks,
         hasInsufficientData: resolved.hasInsufficientData,
+        newsDataUnavailable: resolved.newsDataUnavailable,
       }
     } catch (error) {
       logError('trendingService', error)
-      if (cached?.stocks?.length > 0) {
-        return { stocks: cached.stocks, hasInsufficientData: false }
+      const cachedStocks = filterMentionRankedStocks(cached?.stocks ?? [])
+      if (cachedStocks.length > 0) {
+        return { stocks: cachedStocks, hasInsufficientData: false, newsDataUnavailable: false }
       }
-      return { stocks: [], hasInsufficientData: true }
+      return { stocks: [], hasInsufficientData: true, newsDataUnavailable: false }
     } finally {
       inFlightInitialFetch = null
     }
@@ -531,7 +578,7 @@ export async function getWeeklyTrendingInitial(limit = INITIAL_TRENDING_COUNT) {
 }
 
 /**
- * Expanded load after delay/interaction: remaining tickers, quote only.
+ * Expanded load after delay/interaction: remaining tickers, news mentions only.
  */
 let inFlightExpandedFetch = null
 
@@ -547,14 +594,16 @@ export async function getWeeklyTrendingExpanded(limit = 10, currentStocks = []) 
     const tickers = getExpandedWeeklyTickers(exclude)
 
     if (tickers.length === 0) {
+      const validCurrent = filterMentionRankedStocks(currentStocks)
       return {
-        stocks: currentStocks.slice(0, limit),
-        hasInsufficientData: currentStocks.length === 0,
+        stocks: validCurrent.slice(0, limit),
+        hasInsufficientData: validCurrent.length === 0,
+        newsDataUnavailable: false,
       }
     }
 
     try {
-      const newResults = await fetchLiteTickersSequential(tickers)
+      const newResults = await fetchMentionTickersSequential(tickers, { priority: 'low' })
       const ranked = mergeTrendingResults(currentStocks, newResults, limit)
       const resolved = resolveWeeklyTrendingUpdate(currentStocks, ranked, cached)
 
@@ -562,22 +611,26 @@ export async function getWeeklyTrendingExpanded(limit = 10, currentStocks = []) 
         writeWeeklyTrendingCache({
           stocks: resolved.stocks,
           hasInsufficientData: resolved.hasInsufficientData,
+          newsDataUnavailable: resolved.newsDataUnavailable,
         })
       }
 
       return {
         stocks: resolved.stocks,
         hasInsufficientData: resolved.hasInsufficientData,
+        newsDataUnavailable: resolved.newsDataUnavailable,
       }
     } catch (error) {
       logError('trendingService', error)
-      if (currentStocks.length > 0) {
-        return { stocks: currentStocks, hasInsufficientData: false }
+      const validCurrent = filterMentionRankedStocks(currentStocks)
+      if (validCurrent.length > 0) {
+        return { stocks: validCurrent, hasInsufficientData: false, newsDataUnavailable: false }
       }
-      if (cached?.stocks?.length > 0) {
-        return { stocks: cached.stocks, hasInsufficientData: false }
+      const cachedStocks = filterMentionRankedStocks(cached?.stocks ?? [])
+      if (cachedStocks.length > 0) {
+        return { stocks: cachedStocks, hasInsufficientData: false, newsDataUnavailable: false }
       }
-      return { stocks: [], hasInsufficientData: true }
+      return { stocks: [], hasInsufficientData: true, newsDataUnavailable: false }
     } finally {
       inFlightExpandedFetch = null
     }

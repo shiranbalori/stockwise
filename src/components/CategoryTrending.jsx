@@ -4,6 +4,7 @@ export default function CategoryTrending({
   stocks,
   loading,
   hasInsufficientData,
+  newsDataUnavailable = false,
   onAnalyze,
   analyzeLoading,
 }) {
@@ -21,11 +22,17 @@ export default function CategoryTrending({
         </div>
       )}
 
-      {!loading && hasInsufficientData && (
+      {!loading && newsDataUnavailable && (
+        <p className="mt-5 text-sm sw-text-secondary">
+          לא ניתן לטעון כרגע נתוני אזכורים. נסו שוב מאוחר יותר.
+        </p>
+      )}
+
+      {!loading && !newsDataUnavailable && hasInsufficientData && (
         <p className="mt-5 text-sm sw-text-secondary">אין מספיק נתונים עדכניים</p>
       )}
 
-      {!loading && !hasInsufficientData && stocks.length > 0 && (
+      {!loading && !newsDataUnavailable && !hasInsufficientData && stocks.length > 0 && (
         <ul className="mt-5 space-y-3">
           {stocks.map((stock, index) => {
             const isPositive = (stock.changePercent ?? 0) >= 0
@@ -69,7 +76,7 @@ export default function CategoryTrending({
                       <div className="rounded-lg bg-[#243447] px-2.5 py-1 border border-[rgba(148,163,184,0.12)]">
                         <span className="text-lg font-semibold text-[#60A5FA]">{stock.interestScore}</span>
                       </div>
-                      <p className="mt-0.5 text-[10px] sw-text-muted">ציון עניין</p>
+                      <p className="mt-0.5 text-[10px] sw-text-muted">ציון אזכורים</p>
                     </div>
                   </div>
                 </button>
